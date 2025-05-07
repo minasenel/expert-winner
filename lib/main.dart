@@ -1,20 +1,22 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_database/firebase_database.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/welcome_page.dart';
 import 'screens/home_page.dart';
+import 'config/supabase_config.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Initialize Firebase
-  await Firebase.initializeApp();
-  
-  // Enable Firebase database persistence for offline capabilities
-  FirebaseDatabase.instance.setPersistenceEnabled(true);
-  
+  await Supabase.initialize(
+    url: SupabaseConfig.supabaseUrl,
+    anonKey: SupabaseConfig.supabaseAnonKey,
+    debug: true,
+    authOptions: const FlutterAuthClientOptions(
+      autoRefreshToken: true,
+      authFlowType: AuthFlowType.pkce,
+    ),
+  );
+
   runApp(const MyApp());
 }
 
@@ -25,7 +27,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Serenity Spa',
+      title: 'Nose App',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         // This is the theme of your application.
@@ -62,32 +64,74 @@ class AuthCheckScreen extends StatefulWidget {
 }
 
 class _AuthCheckScreenState extends State<AuthCheckScreen> {
+  late final Stream<AuthState> _authStateChanges;
   bool _isLoading = true;
-  bool _isLoggedIn = false;
+  bool _isAuthenticated = false;
 
   @override
   void initState() {
     super.initState();
+    _authStateChanges = Supabase.instance.client.auth.onAuthStateChange;
+    _setupAuthListener();
     _checkLoginStatus();
+  }
+
+  void _setupAuthListener() {
+    _authStateChanges.listen((data) {
+      final AuthChangeEvent event = data.event;
+      print('Auth state changed: $event');
+      
+      if (event == AuthChangeEvent.initialSession) {
+        print('Initial session received: ${data.session}');
+        if (data.session != null) {
+          setState(() {
+            _isAuthenticated = true;
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _isAuthenticated = false;
+            _isLoading = false;
+          });
+        }
+      } else if (event == AuthChangeEvent.signedIn) {
+        print('User signed in: ${data.session?.user.id}');
+        setState(() {
+          _isAuthenticated = true;
+          _isLoading = false;
+        });
+      } else if (event == AuthChangeEvent.signedOut) {
+        print('User signed out');
+        setState(() {
+          _isAuthenticated = false;
+          _isLoading = false;
+        });
+      }
+    });
   }
 
   Future<void> _checkLoginStatus() async {
     try {
-      // Check if user is logged in via Firebase Auth
-      final User? currentUser = FirebaseAuth.instance.currentUser;
+      final session = Supabase.instance.client.auth.currentSession;
+      print('Current session in _checkLoginStatus: $session');
       
-      // Check if we have persistent login via SharedPreferences
-      final SharedPreferences prefs = await SharedPreferences.getInstance();
-      final bool hasLoginData = prefs.containsKey('user_id') && prefs.containsKey('login_token');
-      
-      setState(() {
-        _isLoggedIn = currentUser != null || hasLoginData;
-        _isLoading = false;
-      });
+      if (session != null) {
+        print('User is logged in: ${session.user.id}');
+        setState(() {
+          _isAuthenticated = true;
+          _isLoading = false;
+        });
+      } else {
+        print('No active session found');
+        setState(() {
+          _isAuthenticated = false;
+          _isLoading = false;
+        });
+      }
     } catch (e) {
       print('Error checking login status: $e');
       setState(() {
-        _isLoggedIn = false;
+        _isAuthenticated = false;
         _isLoading = false;
       });
     }
@@ -103,7 +147,7 @@ class _AuthCheckScreenState extends State<AuthCheckScreen> {
       );
     }
     
-    if (_isLoggedIn) {
+    if (_isAuthenticated) {
       return const HomePage();
     } else {
       return const WelcomePage();

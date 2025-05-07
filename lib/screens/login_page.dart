@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/user_service.dart';
+import 'phone_input_page.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -12,7 +13,6 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
   final _phoneController = TextEditingController();
-  final _passwordController = TextEditingController();
   final _userService = UserService();
   
   bool _isLoading = false;
@@ -21,7 +21,6 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void dispose() {
     _phoneController.dispose();
-    _passwordController.dispose();
     super.dispose();
   }
   
@@ -40,55 +39,19 @@ class _LoginPageState extends State<LoginPage> {
     });
     
     try {
-      // Get values
+      // Get phone number
       final phoneNumber = _phoneController.text.trim();
-      final password = _passwordController.text;
       
-      // Use UserService to authenticate
-      final result = await _userService.authenticateUser(phoneNumber, password);
-      
-      if (result != null && result['isAuthenticated'] == true) {
-        // Store login information using SharedPreferences
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('phoneNumber', phoneNumber);
-        await prefs.setString('userId', result['userId']);
-        await prefs.setBool('isLoggedIn', true);
-        
-        // Store additional user data if needed
-        if (result.containsKey('userData')) {
-          // You can save specific fields if needed
-          // For example: await prefs.setString('userName', result['userData']['name']);
-        }
-        
-        // Clear password for security
-        _passwordController.clear();
-        
-        if (mounted) {
-          // Navigate to home page
-          Navigator.of(context).pushReplacementNamed('/home');
-        }
-      } else {
-        // Handle authentication failure
-        String errorMessage = 'Authentication failed';
-        
-        if (result != null) {
-          switch (result['reason']) {
-            case 'user_not_found':
-              errorMessage = 'User not found';
-              break;
-            case 'invalid_password':
-              errorMessage = 'Incorrect password';
-              break;
-            default:
-              if (result.containsKey('message')) {
-                errorMessage = 'Error: ${result['message']}';
-              }
-          }
-        }
-        
-        setState(() {
-          _errorMessage = errorMessage;
-        });
+      // Navigate to phone input page for OTP verification
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PhoneInputPage(
+              isLogin: true,
+            ),
+          ),
+        );
       }
     } catch (e) {
       print('Error during login: $e');
@@ -151,7 +114,7 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Please enter your credentials to continue',
+                    'Please enter your phone number to continue',
                     style: TextStyle(
                       fontSize: 16,
                       color: Color(0xFF4A4A4A),
@@ -165,7 +128,7 @@ class _LoginPageState extends State<LoginPage> {
                     keyboardType: TextInputType.phone,
                     decoration: InputDecoration(
                       labelText: 'Phone Number',
-                      hintText: 'Enter your phone number',
+                      hintText: '+90 5XX XXX XX XX',
                       prefixIcon: const Icon(Icons.phone),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -179,30 +142,8 @@ class _LoginPageState extends State<LoginPage> {
                       if (value == null || value.isEmpty) {
                         return 'Please enter your phone number';
                       }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  
-                  // Password Field
-                  TextFormField(
-                    controller: _passwordController,
-                    obscureText: true,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      hintText: 'Enter your password',
-                      prefixIcon: const Icon(Icons.lock),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        vertical: 16,
-                        horizontal: 12,
-                      ),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your password';
+                      if (!RegExp(r'^\+?[0-9]{10,13}$').hasMatch(value)) {
+                        return 'Please enter a valid phone number';
                       }
                       return null;
                     },

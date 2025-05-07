@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/user_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'nose_upload_page.dart';
-
+import 'user_details_page.dart';
 class AnimatedServiceButton extends StatefulWidget {
   final String title;
   final VoidCallback onPressed;
@@ -84,80 +84,75 @@ class _AnimatedServiceButtonState extends State<AnimatedServiceButton> with Sing
                 borderRadius: BorderRadius.circular(16),
                 child: Material(
                   color: Colors.transparent,
-                  child: InkWell(
-                    splashColor: Colors.white.withOpacity(0.2),
-                    highlightColor: Colors.transparent,
-                    onTap: () {}, // Actual tap is handled by GestureDetector
-                    child: Container(
-                      padding: const EdgeInsets.all(0),
-                      alignment: Alignment.center,
-                      child: widget.imageUrl != null
-                        ? Column(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Spacer(),
-                              // Text container with gradient background at the bottom
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
-                                    colors: [
-                                      Colors.transparent,
-                                      Colors.black.withOpacity(0.5),
-                                    ],
-                                  ),
-                                ),
-                                child: Text(
-                                  widget.title,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.white,
-                                    shadows: [
-                                      Shadow(
-                                        blurRadius: 3.0,
-                                        color: Colors.black,
-                                        offset: Offset(0, 1),
-                                      ),
-                                    ],
-                                  ),
+                  child: Container(
+                    padding: const EdgeInsets.all(0),
+                    alignment: Alignment.center,
+                    child: widget.imageUrl != null
+                      ? Column(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Spacer(),
+                            // Text container with gradient background at the bottom
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Colors.transparent,
+                                    Colors.black.withOpacity(0.5),
+                                  ],
                                 ),
                               ),
-                            ],
-                          )
-                        : Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Container(
-                                width: 60,
-                                height: 60,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.2),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Icon(
-                                  _getIconForTitle(widget.title),
-                                  color: Colors.white,
-                                  size: 32,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
+                              child: Text(
                                 widget.title,
                                 textAlign: TextAlign.center,
                                 style: const TextStyle(
                                   fontSize: 18,
-                                  fontWeight: FontWeight.w500,
+                                  fontWeight: FontWeight.w600,
                                   color: Colors.white,
+                                  shadows: [
+                                    Shadow(
+                                      blurRadius: 3.0,
+                                      color: Colors.black,
+                                      offset: Offset(0, 1),
+                                    ),
+                                  ],
                                 ),
                               ),
-                            ],
-                          ),
-                    ),
+                            ),
+                          ],
+                        )
+                      : Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              width: 60,
+                              height: 60,
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                _getIconForTitle(widget.title),
+                                color: Colors.white,
+                                size: 32,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              widget.title,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
                   ),
                 ),
               ),
@@ -190,48 +185,85 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final SupabaseClient _supabase = Supabase.instance.client;
   final UserService _userService = UserService();
   String? _phoneNumber;
   bool _isLoading = true;
+  late final Stream<AuthState> _authStateChanges;
 
   @override
   void initState() {
     super.initState();
+    _authStateChanges = _supabase.auth.onAuthStateChange;
+    _setupAuthListener();
     _loadUserData();
   }
 
+  void _setupAuthListener() {
+    _authStateChanges.listen((data) {
+      final AuthChangeEvent event = data.event;
+      print('HomePage - Auth state changed: $event');
+      
+      if (event == AuthChangeEvent.initialSession) {
+        print('HomePage - Initial session received: ${data.session}');
+        _loadUserData();
+      } else if (event == AuthChangeEvent.signedOut) {
+        print('HomePage - User signed out, navigating to welcome page');
+        Navigator.of(context).pushNamedAndRemoveUntil('/welcome', (route) => false);
+      }
+    });
+  }
+
   Future<void> _loadUserData() async {
+    if (!mounted) return;
+    
     setState(() {
       _isLoading = true;
     });
 
     try {
+      final session = _supabase.auth.currentSession;
+      if (session == null) {
+        print('HomePage - No session found in _loadUserData');
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+        return;
+      }
+      print('HomePage - Loading data for user: ${session.user.id}');
+      
       // Get phone number from UserService
       final phoneNumber = await _userService.getUserPhoneNumber();
       
-      setState(() {
-        _phoneNumber = phoneNumber;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _phoneNumber = phoneNumber;
+          _isLoading = false;
+        });
+      }
     } catch (e) {
       print('Error loading user data: $e');
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
   Future<void> _signOut() async {
     try {
-      // Sign out from Firebase
-      await _auth.signOut();
+      print('Starting sign out process...');
+      final session = _supabase.auth.currentSession;
+      if (session != null) {
+        print('Signing out user: ${session.user.id}');
+      }
       
-      // Clear SharedPreferences data
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.clear(); // Removes all data
-      
-      print('User signed out and preferences cleared');
+      // Sign out from Supabase
+      await _supabase.auth.signOut();
+      print('Supabase sign out successful');
       
       // Navigate to welcome page
       if (mounted) {
@@ -239,6 +271,9 @@ class _HomePageState extends State<HomePage> {
       }
     } catch (e) {
       print('Error signing out: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error signing out: ${e.toString()}')),
+      );
     }
   }
 
@@ -281,9 +316,9 @@ class _HomePageState extends State<HomePage> {
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Our Services',
-                        style: TextStyle(
+                      Text(
+                        'Welcome${_phoneNumber != null ? ' ${_phoneNumber}' : ''}!',
+                        style: const TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.bold,
                           color: Color(0xFF2C2C2C),
@@ -298,8 +333,7 @@ class _HomePageState extends State<HomePage> {
                               title: 'Nose Simulation',
                               onPressed: () {
                                 print('Nose Simulation button clicked');
-                                Navigator.push(
-                                  context,
+                                Navigator.of(context).push(
                                   MaterialPageRoute(
                                     builder: (context) => const NoseUploadPage(),
                                   ),
@@ -308,7 +342,7 @@ class _HomePageState extends State<HomePage> {
                               color: const Color(0xFF8E8D8A),
                               imageUrl: 'https://m001z3.s3.amazonaws.com/stock%20ph/istockphoto-1482627867-612x612.jpg',
                             ),
-                            const SizedBox(height: 8), // Reduced spacing between buttons
+                            const SizedBox(height: 8),
                             _buildServiceButton(
                               title: 'Ask Our Assistant',
                               onPressed: () {
@@ -317,7 +351,7 @@ class _HomePageState extends State<HomePage> {
                               color: const Color(0xFF8E8D8A).withOpacity(0.9),
                               imageUrl: 'https://m001z3.s3.amazonaws.com/stock%20ph/medicine-healthcare-people-concept-female-600nw-2188588635.webp',
                             ),
-                            const SizedBox(height: 8), // Reduced spacing between buttons
+                            const SizedBox(height: 8),
                             _buildServiceButton(
                               title: 'Our Team',
                               onPressed: () {

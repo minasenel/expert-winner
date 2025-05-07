@@ -4,16 +4,13 @@ import 'package:intl/intl.dart';
 import 'home_page.dart';
 import '../services/user_service.dart';
 
-// Test mode configuration
-const bool _kTestMode = true;
-// Test data for user details
-const String _kTestFirstName = 'John';
-const String _kTestLastName = 'Doe';
-const String _kTestDOB = '01/01/1990';
-const String _kTestGender = 'Male';
-
 class UserDetailsPage extends StatefulWidget {
-  const UserDetailsPage({super.key});
+  final String phoneNumber;
+
+  const UserDetailsPage({
+    super.key,
+    required this.phoneNumber,
+  });
 
   @override
   State<UserDetailsPage> createState() => _UserDetailsPageState();
@@ -31,18 +28,8 @@ class _UserDetailsPageState extends State<UserDetailsPage> {
   @override
   void initState() {
     super.initState();
-    
-    // Pre-fill with test data if in test mode
-    if (_kTestMode) {
-      _nameController.text = _kTestFirstName;
-      _surnameController.text = _kTestLastName;
-      _dobController.text = _kTestDOB;
-      _selectedGender = _kTestGender;
-      
-      print('Test mode: Pre-filled user details with test data');
-      print('Name: $_kTestFirstName, Surname: $_kTestLastName');
-      print('DOB: $_kTestDOB, Gender: $_kTestGender');
-    }
+    print('User Details Page initialized');
+    print('Phone Number: ${widget.phoneNumber}');
   }
 
   @override
@@ -93,6 +80,7 @@ class _UserDetailsPageState extends State<UserDetailsPage> {
 
       try {
         print('Saving user details: ${_nameController.text}, ${_surnameController.text}, ${_dobController.text}, $_selectedGender');
+        print('Phone Number: ${widget.phoneNumber}');
         
         // Save user details to the database
         await _userService.saveUserDetails(
@@ -100,6 +88,7 @@ class _UserDetailsPageState extends State<UserDetailsPage> {
           _surnameController.text,
           _dobController.text,
           _selectedGender!,
+          widget.phoneNumber, // Pass the phone number to the service
         );
 
         // Show success message

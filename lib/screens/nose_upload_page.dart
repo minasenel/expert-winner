@@ -1,647 +1,326 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:firebase_database/firebase_database.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:image_picker/image_picker.dart';
+import '../services/storage_service.dart';
+
+enum ImageType { front, left, right }
 
 class NoseUploadPage extends StatefulWidget {
   const NoseUploadPage({Key? key}) : super(key: key);
-
-  @override
-  State<NoseUploadPage> createState() => _NoseUploadPageState();
+  @override State<NoseUploadPage> createState() => _NoseUploadPageState();
 }
 
 class _NoseUploadPageState extends State<NoseUploadPage> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseStorage _storage = FirebaseStorage.instance;
-  final DatabaseReference _database = FirebaseDatabase.instance.ref();
+  final SupabaseClient _supabase = Supabase.instance.client;
+  final StorageService _storage = StorageService();
   final ImagePicker _picker = ImagePicker();
-  
-  // Local image files
-  File? _frontImage;
-  File? _leftImage;
-  File? _rightImage;
-  
-  // Temporary storage URLs before final save
-  String? _frontImageUrl;
-  String? _leftImageUrl;
-  String? _rightImageUrl;
-  
-  // Loading states
-  bool _uploadingFrontImage = false;
-  bool _uploadingLeftImage = false;
-  bool _uploadingRightImage = false;
-  bool _savingAllImages = false;
-  
-  // Track which images have been selected
-  bool _frontImageSelected = false;
-  bool _leftImageSelected = false;
-  bool _rightImageSelected = false;
-  
+
+  File? _frontImage, _leftImage, _rightImage;
+  String? _frontUrl, _leftUrl, _rightUrl;
+  bool _loadingFront=false, _loadingLeft=false, _loadingRight=false;
+  bool _savingAll=false;
+
   @override
   void initState() {
     super.initState();
+    print('NoseUploadPage initialized');
+    print('Current session: ${_supabase.auth.currentSession}');
     _loadExistingImages();
   }
-  
+
   Future<void> _loadExistingImages() async {
+    print('Loading existing images...');
+    final user = _supabase.auth.currentSession?.user;
+    if (user == null) {
+      print('No user session found in _loadExistingImages');
+      return;
+    }
+    print('User ID: ${user.id}');
     try {
-      final User? user = _auth.currentUser;
-      if (user == null) return;
-      
-      final dataSnapshot = await _database
-          .child('users/${user.uid}/nosePhotos')
-          .get();
-      
-      if (dataSnapshot.exists) {
-        final data = dataSnapshot.value as Map<dynamic, dynamic>?;
-        if (data != null) {
-          setState(() {
-            _frontImageUrl = data['front'] as String?;
-            _leftImageUrl = data['left'] as String?;
-            _rightImageUrl = data['right'] as String?;
-            
-            // Mark images as selected if they exist
-            _frontImageSelected = _frontImageUrl != null;
-            _leftImageSelected = _leftImageUrl != null;
-            _rightImageSelected = _rightImageUrl != null;
-          });
-        }
+      final data = await _supabase
+        .from('simulation_requests')
+        .select('front_image_url, left_image_url, right_image_url')
+        .eq('user_id', user.id)
+        .order('created_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+        
+      print('Retrieved simulation request data: $data');
+      if (data != null) {
+        setState(() {
+          _frontUrl = data['front_image_url'];
+          _leftUrl = data['left_image_url'];
+          _rightUrl = data['right_image_url'];
+        });
       }
+      print('Loaded URLs - Front: $_frontUrl, Left: $_leftUrl, Right: $_rightUrl');
     } catch (e) {
       print('Error loading existing images: $e');
     }
   }
-  
-  Future<void> _showImageSourceOptions(ImageType imageType) async {
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (BuildContext context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Choose an option',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    color: const Color(0xFF2C2C2C),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                ListTile(
-                  leading: const CircleAvatar(
-                    backgroundColor: Color(0xFF8E8D8A),
-                    child: Icon(Icons.camera_alt, color: Colors.white),
-                  ),
-                  title: const Text('Take a Photo'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _getImage(ImageSource.camera, imageType);
-                  },
-                ),
-                const SizedBox(height: 8),
-                ListTile(
-                  leading: const CircleAvatar(
-                    backgroundColor: Color(0xFF8E8D8A),
-                    child: Icon(Icons.photo_library, color: Colors.white),
-                  ),
-                  title: const Text('Choose from Gallery'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _getImage(ImageSource.gallery, imageType);
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+
+  Future<void> _pickImage(ImageSource src, ImageType type) async {
+    final XFile? file = await _picker.pickImage(source: src);
+    if (file == null) return;
+    
+    setState(() {
+      switch (type) {
+        case ImageType.front: _frontImage = File(file.path); break;
+        case ImageType.left:  _leftImage  = File(file.path); break;
+        case ImageType.right: _rightImage = File(file.path); break;
+      }
+    });
+    await _uploadTemp(File(file.path), type);
   }
-  
-  Future<void> _getImage(ImageSource source, ImageType imageType) async {
-    try {
-      final XFile? pickedFile = await _picker.pickImage(
-        source: source,
-        maxWidth: 1000,
-        maxHeight: 1000,
-        imageQuality: 85,
-      );
-      
-      if (pickedFile == null) return;
-      
-      final File imageFile = File(pickedFile.path);
-      
-      // Save the selected image file locally
-      setState(() {
-        switch (imageType) {
-          case ImageType.front:
-            _frontImage = imageFile;
-            _frontImageSelected = true;
-            break;
-          case ImageType.left:
-            _leftImage = imageFile;
-            _leftImageSelected = true;
-            break;
-          case ImageType.right:
-            _rightImage = imageFile;
-            _rightImageSelected = true;
-            break;
-        }
-      });
-      
-      // Generate a temporary URL by uploading the image to Firebase
-      // This allows the user to see the uploaded image before final save
-      await _getTempImageUrl(imageFile, imageType);
-      
-    } catch (e) {
-      _showErrorDialog('Permission Denied', 'Please grant camera and storage permissions to use this feature.');
-      print('Error picking image: $e');
-    }
-  }
-  
-  Future<void> _getTempImageUrl(File imageFile, ImageType imageType) async {
-    final User? user = _auth.currentUser;
+
+  Future<void> _uploadTemp(File file, ImageType type) async {
+    print('Starting temporary upload for ${type.name} image');
+    final user = _supabase.auth.currentSession?.user;
     if (user == null) {
-      _showErrorDialog('Authentication Error', 'Please sign in to upload images.');
+      print('No user session found in _uploadTemp');
       return;
     }
+    print('User ID for temp upload: ${user.id}');
     
+    setState(() {
+      if (type==ImageType.front) _loadingFront=true;
+      if (type==ImageType.left)  _loadingLeft=true;
+      if (type==ImageType.right) _loadingRight=true;
+    });
+
     try {
-      // Set loading state
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final name = '${type.name}_$ts.jpg';
+      final path = '${user.id}/$name';
+      print('Uploading to path: $path to nose_temp bucket');
+      final url = await _storage.uploadFile(file, path, bucket: 'nose_temp');
+      print('Temporary upload successful. URL: $url');
+      
       setState(() {
-        switch (imageType) {
-          case ImageType.front:
-            _uploadingFrontImage = true;
-            break;
-          case ImageType.left:
-            _uploadingLeftImage = true;
-            break;
-          case ImageType.right:
-            _uploadingRightImage = true;
-            break;
-        }
+        if (type==ImageType.front) { _frontUrl=url; _loadingFront=false; }
+        if (type==ImageType.left)  { _leftUrl =url; _loadingLeft=false;  }
+        if (type==ImageType.right) { _rightUrl=url; _loadingRight=false; }
       });
-      
-      // Create a temporary path with a timestamp to avoid cache issues
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final String fileName = '${_getFileNameFromType(imageType)}_$timestamp.jpg';
-      final String path = 'nose_images_temp/${user.uid}/$fileName';
-      
-      final Reference storageRef = _storage.ref().child(path);
-      final UploadTask uploadTask = storageRef.putFile(imageFile);
-      
-      final TaskSnapshot taskSnapshot = await uploadTask;
-      final String downloadUrl = await taskSnapshot.ref.getDownloadURL();
-      
-      // Store the URL temporarily for display
-      setState(() {
-        switch (imageType) {
-          case ImageType.front:
-            _frontImageUrl = downloadUrl;
-            _uploadingFrontImage = false;
-            break;
-          case ImageType.left:
-            _leftImageUrl = downloadUrl;
-            _uploadingLeftImage = false;
-            break;
-          case ImageType.right:
-            _rightImageUrl = downloadUrl;
-            _uploadingRightImage = false;
-            break;
-        }
-      });
-      
     } catch (e) {
+      print('Error in temporary upload: $e');
       setState(() {
-        switch (imageType) {
-          case ImageType.front:
-            _uploadingFrontImage = false;
-            break;
-          case ImageType.left:
-            _uploadingLeftImage = false;
-            break;
-          case ImageType.right:
-            _uploadingRightImage = false;
-            break;
-        }
+        if (type==ImageType.front) _loadingFront=false;
+        if (type==ImageType.left)  _loadingLeft=false;
+        if (type==ImageType.right) _loadingRight=false;
       });
-      
-      _showErrorDialog('Upload Failed', 'There was an error uploading your image. Please try again.');
-      print('Error uploading temporary image: $e');
     }
   }
-  
-  Future<void> _saveAllImagesToFirebase() async {
-    final User? user = _auth.currentUser;
-    if (user == null) {
-      _showErrorDialog('Authentication Error', 'Please sign in to save images.');
+
+  Future<void> _saveAll() async {
+    print('Save All Images button pressed');
+    final user = _supabase.auth.currentSession?.user;
+    if (user==null) {
+      print('Error: No user session found');
+      _showError('Please log in to save images');
       return;
     }
-    
-    // Check if all three images are selected
-    if (!_frontImageSelected || !_leftImageSelected || !_rightImageSelected) {
-      _showErrorDialog('Missing Images', 'Please upload all three photos before saving.');
+
+    if (_frontImage==null || _leftImage==null || _rightImage==null) {
+      print('Error: Missing images - Front: ${_frontImage != null}, Left: ${_leftImage != null}, Right: ${_rightImage != null}');
+      _showError('Please select all three images');
       return;
     }
-    
+
+    setState(() => _savingAll=true);
+    print('Starting to save images...');
+    print('User ID: ${user.id}');
     try {
-      setState(() {
-        _savingAllImages = true;
+      // Save to permanent storage in clinicbucket
+      final frontPath = '${user.id}/front.jpg';
+      final leftPath  = '${user.id}/left.jpg';
+      final rightPath = '${user.id}/right.jpg';
+      
+      print('Uploading front image...');
+      final frontUrl = await _storage.uploadFile(_frontImage!, frontPath, bucket: 'clinicbucket');
+      print('Front image uploaded successfully: $frontUrl');
+      
+      print('Uploading left image...');
+      final leftUrl  = await _storage.uploadFile(_leftImage!, leftPath, bucket: 'clinicbucket');
+      print('Left image uploaded successfully: $leftUrl');
+      
+      print('Uploading right image...');
+      final rightUrl = await _storage.uploadFile(_rightImage!, rightPath, bucket: 'clinicbucket');
+      print('Right image uploaded successfully: $rightUrl');
+      
+      print('Creating simulation request record...');
+      // Create simulation request record
+      await _supabase.from('simulation_requests').insert({
+        'user_id': user.id,
+        'front_image_url': frontUrl,
+        'left_image_url': leftUrl,
+        'right_image_url': rightUrl,
+        'status': true,
+        'created_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String()
       });
+      print('Simulation request created successfully');
       
-      Map<String, String> imageUrls = {};
-      
-      // Upload front image
-      if (_frontImage != null) {
-        final frontPath = 'nose_images/${user.uid}/front.jpg';
-        final frontStorageRef = _storage.ref().child(frontPath);
-        await frontStorageRef.putFile(_frontImage!);
-        imageUrls['front'] = await frontStorageRef.getDownloadURL();
-      } else if (_frontImageUrl != null) {
-        // Use existing URL if file wasn't changed
-        imageUrls['front'] = _frontImageUrl!;
+      print('Cleaning up temporary files...');
+      // Clean up temporary files
+      if (_frontUrl != null) {
+        await _storage.deleteFile('${user.id}/front.jpg', bucket: 'nose_temp');
+        print('Temporary front image deleted');
+      }
+      if (_leftUrl != null) {
+        await _storage.deleteFile('${user.id}/left.jpg', bucket: 'nose_temp');
+        print('Temporary left image deleted');
+      }
+      if (_rightUrl != null) {
+        await _storage.deleteFile('${user.id}/right.jpg', bucket: 'nose_temp');
+        print('Temporary right image deleted');
       }
       
-      // Upload left image
-      if (_leftImage != null) {
-        final leftPath = 'nose_images/${user.uid}/left.jpg';
-        final leftStorageRef = _storage.ref().child(leftPath);
-        await leftStorageRef.putFile(_leftImage!);
-        imageUrls['left'] = await leftStorageRef.getDownloadURL();
-      } else if (_leftImageUrl != null) {
-        // Use existing URL if file wasn't changed
-        imageUrls['left'] = _leftImageUrl!;
-      }
-      
-      // Upload right image
-      if (_rightImage != null) {
-        final rightPath = 'nose_images/${user.uid}/right.jpg';
-        final rightStorageRef = _storage.ref().child(rightPath);
-        await rightStorageRef.putFile(_rightImage!);
-        imageUrls['right'] = await rightStorageRef.getDownloadURL();
-      } else if (_rightImageUrl != null) {
-        // Use existing URL if file wasn't changed
-        imageUrls['right'] = _rightImageUrl!;
-      }
-      
-      // Save all URLs to Firebase Realtime Database
-      await _database
-          .child('users/${user.uid}/nosePhotos')
-          .update(imageUrls);
-      
-      setState(() {
-        _savingAllImages = false;
-        // Update URLs with permanent ones
-        _frontImageUrl = imageUrls['front'];
-        _leftImageUrl = imageUrls['left'];
-        _rightImageUrl = imageUrls['right'];
-      });
-      
-      _showSuccessSnackbar('All images saved successfully!');
+      setState(() => _savingAll=false);
+      print('All images saved successfully!');
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Simulation request created successfully!')));
+      Navigator.pop(context);
     } catch (e) {
-      setState(() {
-        _savingAllImages = false;
-      });
-      
-      _showErrorDialog('Save Failed', 'There was an error saving your images. Please try again.');
-      print('Error saving all images: $e');
+      print('Error saving images: $e');
+      setState(() => _savingAll=false);
+      _showError('Failed to save images: ${e.toString()}');
     }
   }
-  
-  String _getFileNameFromType(ImageType type) {
-    switch (type) {
-      case ImageType.front:
-        return 'front';
-      case ImageType.left:
-        return 'left';
-      case ImageType.right:
-        return 'right';
-    }
+
+  void _showError(String msg) {
+    showDialog(context: context, builder: (_) => AlertDialog(
+      title: const Text('Error'), content: Text(msg),
+      actions: [TextButton(onPressed: ()=>Navigator.pop(context), child: const Text('OK'))],
+    ));
   }
-  
-  void _showSuccessSnackbar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.green,
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
-  
-  void _showErrorDialog(String title, String message) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFF8E8D8A),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-  
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'Nose Simulation',
-          style: TextStyle(
-            color: Color(0xFF2C2C2C),
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF2C2C2C)),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFFF5F5F5),
-              Color(0xFFE8E6E1),
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Upload Photos for Nose Simulation',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2C2C2C),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Please upload clear, well-lit photos of your face from the front and both sides.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Color(0xFF4A4A4A),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  
-                  // Front Profile Photo Section
-                  _buildPhotoSection(
-                    title: 'Front Photo',
-                    buttonText: 'Take or Upload Front Photo',
-                    image: _frontImage,
-                    imageUrl: _frontImageUrl,
-                    isUploading: _uploadingFrontImage,
-                    onPressed: () => _showImageSourceOptions(ImageType.front),
-                  ),
-                  
-                  const SizedBox(height: 24),
-                  
-                  // Left Side Profile Photo Section
-                  _buildPhotoSection(
-                    title: 'Left Side Photo',
-                    buttonText: 'Take or Upload Left Photo',
-                    image: _leftImage,
-                    imageUrl: _leftImageUrl,
-                    isUploading: _uploadingLeftImage,
-                    onPressed: () => _showImageSourceOptions(ImageType.left),
-                  ),
-                  
-                  const SizedBox(height: 24),
-                  
-                  // Right Side Profile Photo Section
-                  _buildPhotoSection(
-                    title: 'Right Side Photo',
-                    buttonText: 'Take or Upload Right Photo',
-                    image: _rightImage,
-                    imageUrl: _rightImageUrl,
-                    isUploading: _uploadingRightImage,
-                    onPressed: () => _showImageSourceOptions(ImageType.right),
-                  ),
-                  
-                  const SizedBox(height: 36),
-                  
-                  // Save Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 56,
-                    child: ElevatedButton(
-                      onPressed: _savingAllImages || 
-                                 _uploadingFrontImage || 
-                                 _uploadingLeftImage || 
-                                 _uploadingRightImage || 
-                                 !_allImagesSelected() 
-                                 ? null 
-                                 : _saveAllImagesToFirebase,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF8E8D8A),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        elevation: 0,
-                      ),
-                      child: _savingAllImages
-                          ? const Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white,
-                                    strokeWidth: 2,
-                                  ),
-                                ),
-                                SizedBox(width: 16),
-                                Text(
-                                  'Saving Images...',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w500,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ],
-                            )
-                          : const Text(
-                              'SAVE ALL IMAGES',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                    ),
-                  ),
-                ],
+      appBar: AppBar(title: const Text('Upload Nose Photos')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Welcome message
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: const Text(
+                'Welcome! You can upload front, left, and right profile images of your nose so our doctors can inspect them and provide personalized feedback.',
+                style: TextStyle(
+                  fontSize: 16,
+                  color: Colors.black87,
+                  height: 1.5,
+                ),
               ),
             ),
-          ),
+            const SizedBox(height: 24),
+            
+            // Grid layout for image uploads
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 2,
+              mainAxisSpacing: 16,
+              crossAxisSpacing: 16,
+              childAspectRatio: 1,
+              children: [
+                _buildUploadBox('Front View', _frontImage, _frontUrl, _loadingFront, () => _showModal(ImageType.front)),
+                _buildUploadBox('Left Profile', _leftImage, _leftUrl, _loadingLeft, () => _showModal(ImageType.left)),
+                _buildUploadBox('Right Profile', _rightImage, _rightUrl, _loadingRight, () => _showModal(ImageType.right)),
+              ],
+            ),
+            
+            const SizedBox(height: 32),
+            Center(
+              child: ElevatedButton(
+                onPressed: _savingAll ? null : _saveAll,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                ),
+                child: _savingAll 
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save All Images'),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
-  
-  bool _allImagesSelected() {
-    return _frontImageSelected && _leftImageSelected && _rightImageSelected;
-  }
-  
-  Widget _buildPhotoSection({
-    required String title,
-    required String buttonText,
-    required File? image,
-    required String? imageUrl,
-    required bool isUploading,
-    required VoidCallback onPressed,
-  }) {
+
+  Widget _buildUploadBox(String label, File? localImage, String? url, bool loading, VoidCallback onTap) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          title,
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF2C2C2C),
+          label,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w500,
           ),
         ),
-        const SizedBox(height: 12),
-        Container(
-          height: 220,
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 8,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: isUploading
-                ? const Center(
-                    child: CircularProgressIndicator(
-                      color: Color(0xFF8E8D8A),
-                    ),
-                  )
-                : image != null
-                    ? Image.file(
-                        image,
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                        height: double.infinity,
-                      )
-                    : imageUrl != null
-                        ? Image.network(
-                            imageUrl,
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            height: double.infinity,
-                            loadingBuilder: (context, child, loadingProgress) {
-                              if (loadingProgress == null) return child;
-                              return Center(
-                                child: CircularProgressIndicator(
-                                  value: loadingProgress.expectedTotalBytes != null
-                                      ? loadingProgress.cumulativeBytesLoaded /
-                                          loadingProgress.expectedTotalBytes!
-                                      : null,
-                                  color: const Color(0xFF8E8D8A),
-                                ),
-                              );
-                            },
-                            errorBuilder: (context, error, stackTrace) {
-                              return const Center(
-                                child: Icon(
-                                  Icons.error_outline,
-                                  color: Colors.red,
-                                  size: 48,
-                                ),
-                              );
-                            },
-                          )
-                        : Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(
-                                  Icons.add_a_photo,
-                                  color: Color(0xFF8E8D8A),
-                                  size: 48,
-                                ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  'No photo selected',
-                                  style: TextStyle(
-                                    color: Colors.grey[600],
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          height: 50,
-          child: ElevatedButton(
-            onPressed: isUploading ? null : onPressed,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF8E8D8A),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              elevation: 0,
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            height: 140,
+            decoration: BoxDecoration(
+              color: Colors.grey[200],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey[300]!),
             ),
-            child: Text(
-              buttonText,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: Colors.white,
-              ),
-            ),
+            child: loading
+              ? const Center(child: CircularProgressIndicator())
+              : ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: localImage != null
+                    ? Image.file(localImage, fit: BoxFit.cover, width: double.infinity)
+                    : url != null
+                      ? Image.network(url, fit: BoxFit.cover, width: double.infinity)
+                      : const Center(
+                          child: Icon(Icons.add_a_photo, color: Colors.grey, size: 32),
+                        ),
+                ),
           ),
         ),
       ],
     );
   }
-}
 
-// Enum to identify which image type is being processed
-enum ImageType {
-  front,
-  left,
-  right,
+  void _showModal(ImageType type) => showModalBottomSheet(
+    context: context,
+    builder: (_) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.camera_alt),
+            title: const Text('Take Photo'),
+            onTap: () {
+              Navigator.pop(context);
+              _pickImage(ImageSource.camera, type);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.photo_library),
+            title: const Text('Choose from Gallery'),
+            onTap: () {
+              Navigator.pop(context);
+              _pickImage(ImageSource.gallery, type);
+            },
+          ),
+        ],
+      ),
+    ),
+  );
 } 
