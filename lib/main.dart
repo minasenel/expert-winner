@@ -1,7 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/welcome_page.dart';
+import 'screens/home_page.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Firebase
+  await Firebase.initializeApp();
+  
+  // Enable Firebase database persistence for offline capabilities
+  FirebaseDatabase.instance.setPersistenceEnabled(true);
+  
   runApp(const MyApp());
 }
 
@@ -36,8 +49,65 @@ class MyApp extends StatelessWidget {
           seedColor: const Color(0xFF8E8D8A),
         ),
       ),
-      home: const WelcomePage(),
+      home: const AuthCheckScreen(),
     );
+  }
+}
+
+class AuthCheckScreen extends StatefulWidget {
+  const AuthCheckScreen({super.key});
+
+  @override
+  State<AuthCheckScreen> createState() => _AuthCheckScreenState();
+}
+
+class _AuthCheckScreenState extends State<AuthCheckScreen> {
+  bool _isLoading = true;
+  bool _isLoggedIn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkLoginStatus();
+  }
+
+  Future<void> _checkLoginStatus() async {
+    try {
+      // Check if user is logged in via Firebase Auth
+      final User? currentUser = FirebaseAuth.instance.currentUser;
+      
+      // Check if we have persistent login via SharedPreferences
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final bool hasLoginData = prefs.containsKey('user_id') && prefs.containsKey('login_token');
+      
+      setState(() {
+        _isLoggedIn = currentUser != null || hasLoginData;
+        _isLoading = false;
+      });
+    } catch (e) {
+      print('Error checking login status: $e');
+      setState(() {
+        _isLoggedIn = false;
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+    
+    if (_isLoggedIn) {
+      return const HomePage();
+    } else {
+      return const WelcomePage();
+    }
   }
 }
 
