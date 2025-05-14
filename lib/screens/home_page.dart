@@ -4,6 +4,9 @@ import '../services/user_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'nose_upload_page.dart';
 import 'user_details_page.dart';
+import 'simulation_result_page.dart';
+import 'our_team_page.dart';
+import '../widgets/simulation_status_box.dart';
 class AnimatedServiceButton extends StatefulWidget {
   final String title;
   final VoidCallback onPressed;
@@ -25,6 +28,8 @@ class AnimatedServiceButton extends StatefulWidget {
 class _AnimatedServiceButtonState extends State<AnimatedServiceButton> with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _scaleAnimation;
+  bool _isImageLoading = true;
+  bool _hasImageError = false;
 
   @override
   void initState() {
@@ -69,16 +74,6 @@ class _AnimatedServiceButtonState extends State<AnimatedServiceButton> with Sing
                     offset: const Offset(0, 4),
                   ),
                 ],
-                image: widget.imageUrl != null
-                    ? DecorationImage(
-                        image: NetworkImage(widget.imageUrl!),
-                        fit: BoxFit.cover,
-                        colorFilter: ColorFilter.mode(
-                          Colors.black.withOpacity(0.40),
-                          BlendMode.darken,
-                        ),
-                      )
-                    : null,
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(16),
@@ -88,41 +83,129 @@ class _AnimatedServiceButtonState extends State<AnimatedServiceButton> with Sing
                     padding: const EdgeInsets.all(0),
                     alignment: Alignment.center,
                     child: widget.imageUrl != null
-                      ? Column(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      ? Stack(
+                          fit: StackFit.expand,
                           children: [
-                            const Spacer(),
-                            // Text container with gradient background at the bottom
-                            Container(
+                            Image.network(
+                              widget.imageUrl!,
+                              fit: BoxFit.cover,
+                              alignment: const Alignment(0.0, -0.2),
                               width: double.infinity,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Colors.transparent,
-                                    Colors.black.withOpacity(0.5),
-                                  ],
-                                ),
-                              ),
-                              child: Text(
-                                widget.title,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white,
-                                  shadows: [
-                                    Shadow(
-                                      blurRadius: 3.0,
-                                      color: Colors.black,
-                                      offset: Offset(0, 1),
+                              height: double.infinity,
+                              opacity: const AlwaysStoppedAnimation(0.75),
+                              loadingBuilder: (context, child, loadingProgress) {
+                                if (loadingProgress == null) {
+                                  _isImageLoading = false;
+                                  return Stack(
+                                    children: [
+                                      child,
+                                      Positioned(
+                                        bottom: 16,
+                                        left: 0,
+                                        right: 0,
+                                        child: Text(
+                                          widget.title,
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                            shadows: [
+                                              Shadow(
+                                                offset: Offset(0, 1),
+                                                blurRadius: 3.0,
+                                                color: Colors.black,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }
+                                return Container(
+                                  color: widget.color,
+                                  child: const Center(
+                                    child: CircularProgressIndicator(
+                                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                                     ),
-                                  ],
+                                  ),
+                                );
+                              },
+                              errorBuilder: (context, error, stackTrace) {
+                                print('Error loading image: $error');
+                                _hasImageError = true;
+                                return Container(
+                                  color: widget.color,
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Container(
+                                        width: 60,
+                                        height: 60,
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withOpacity(0.2),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: Icon(
+                                          _getIconForTitle(widget.title),
+                                          color: Colors.white,
+                                          size: 32,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 16),
+                                      Text(
+                                        widget.title,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                            if (!_isImageLoading && !_hasImageError)
+                              Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      Colors.transparent,
+                                      Colors.black.withOpacity(0.5),
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
+                            if (!_isImageLoading && !_hasImageError)
+                              Positioned(
+                                bottom: 0,
+                                left: 0,
+                                right: 0,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  child: Text(
+                                    widget.title,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                      shadows: [
+                                        Shadow(
+                                          blurRadius: 3.0,
+                                          color: Colors.black,
+                                          offset: Offset(0, 1),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
                           ],
                         )
                       : Column(
@@ -309,62 +392,76 @@ class _HomePageState extends State<HomePage> {
           ),
         ),
         child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Welcome${_phoneNumber != null ? ' ${_phoneNumber}' : ''}!',
-                        style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF2C2C2C),
-                        ),
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 16),
+                          Expanded(
+                            child: ListView(
+                              physics: const BouncingScrollPhysics(),
+                              children: [
+                                _buildServiceButton(
+                                  title: 'Nose Simulation',
+                                  onPressed: () {
+                                    print('Nose Simulation button clicked');
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) => const NoseUploadPage(),
+                                      ),
+                                    );
+                                  },
+                                  color: const Color(0xFF8E8D8A),
+                                  imageUrl: 'https://m001z3.s3.eu-north-1.amazonaws.com/stock%20ph/istockphoto-1482627867-612x612.jpg',
+                                ),
+                                const SizedBox(height: 8),
+                                _buildServiceButton(
+                                  title: 'Ask Our Assistant',
+                                  onPressed: () {
+                                    print('Ask Our Assistant button clicked');
+                                  },
+                                  color: const Color(0xFF8E8D8A).withOpacity(0.9),
+                                  imageUrl: 'https://m001z3.s3.eu-north-1.amazonaws.com/stock%20ph/medicine-healthcare-people-concept-female-600nw-2188588635.webp',
+                                ),
+                                const SizedBox(height: 8),
+                                _buildServiceButton(
+                                  title: 'Our Team',
+                                  onPressed: () {
+                                    print('Our Team button clicked');
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) => const OurTeamPage(),
+                                      ),
+                                    );
+                                  },
+                                  color: const Color(0xFF8E8D8A).withOpacity(0.8),
+                                  imageUrl: 'https://m001z3.s3.eu-north-1.amazonaws.com/stock%20ph/group-doctors-nurses-standing-join-600nw-1487355692.webp',
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 16),
-                      Expanded(
-                        child: ListView(
-                          physics: const BouncingScrollPhysics(),
-                          children: [
-                            _buildServiceButton(
-                              title: 'Nose Simulation',
-                              onPressed: () {
-                                print('Nose Simulation button clicked');
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (context) => const NoseUploadPage(),
-                                  ),
-                                );
-                              },
-                              color: const Color(0xFF8E8D8A),
-                              imageUrl: 'https://m001z3.s3.amazonaws.com/stock%20ph/istockphoto-1482627867-612x612.jpg',
-                            ),
-                            const SizedBox(height: 8),
-                            _buildServiceButton(
-                              title: 'Ask Our Assistant',
-                              onPressed: () {
-                                print('Ask Our Assistant button clicked');
-                              },
-                              color: const Color(0xFF8E8D8A).withOpacity(0.9),
-                              imageUrl: 'https://m001z3.s3.amazonaws.com/stock%20ph/medicine-healthcare-people-concept-female-600nw-2188588635.webp',
-                            ),
-                            const SizedBox(height: 8),
-                            _buildServiceButton(
-                              title: 'Our Team',
-                              onPressed: () {
-                                print('Our Team button clicked');
-                              },
-                              color: const Color(0xFF8E8D8A).withOpacity(0.8),
-                              imageUrl: 'https://m001z3.s3.amazonaws.com/stock%20ph/group-doctors-nurses-standing-join-600nw-1487355692.webp',
-                            ),
-                          ],
-                        ),
+              ),
+              Positioned(
+                top: 16,
+                left: 24,
+                child: SimulationStatusBox(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => const SimulationResultPage(),
                       ),
-                    ],
-                  ),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         ),
       ),
